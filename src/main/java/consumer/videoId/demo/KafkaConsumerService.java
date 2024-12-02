@@ -20,6 +20,9 @@ public class KafkaConsumerService {
     private final SseEmitters sseEmitters;
     private KafkaConsumer<String, String> consumer;
 
+    // 성능 개선을 위한 스레드 풀
+    private final ExecutorService executorService = Executors.newFixedThreadPool(10);
+
     public KafkaConsumerService(SseEmitters sseEmitters) {
         this.sseEmitters = sseEmitters;
     }
@@ -55,44 +58,54 @@ public class KafkaConsumerService {
     }
 
     private void processKafkaMessage(String data) {
-        try {
-            JsonNode rootNode = objectMapper.readTree(data);
-            System.out.println("Received Kafka message: " + rootNode);
+        executorService.submit(() -> {
+            try {
+                System.out.println("Raw Kafka message received: " + data); // 원본 메시지 로그
+                JsonNode rootNode = objectMapper.readTree(data);
 
-            String videoId = Optional.ofNullable(rootNode.get("videoId"))
-                    .map(JsonNode::asText)
-                    .orElseThrow(() -> new IllegalArgumentException("Missing 'videoId'"));
+                // videoId 추출
+                String videoId = Optional.ofNullable(rootNode.get("videoId"))
+                        .map(JsonNode::asText)
+                        .orElseThrow(() -> new IllegalArgumentException("Missing 'videoId'"));
+                System.out.println("Extracted videoId: " + videoId); // videoId 추출 로그
 
-            JsonNode itemsNode = Optional.ofNullable(rootNode.get("items"))
-                    .orElseThrow(() -> new IllegalArgumentException("Missing 'items'"));
+                // items 배열 추출
+                JsonNode itemsNode = Optional.ofNullable(rootNode.get("items"))
+                        .orElseThrow(() -> new IllegalArgumentException("Missing 'items'"));
 
-            // Process each item in the 'items' array
-            if (itemsNode.isArray()) {
-                for (JsonNode itemNode : itemsNode) {
-                    processItem(videoId, itemNode);
+                if (itemsNode.isArray()) {
+                    System.out.println("Processing 'items' array with size: " + itemsNode.size());
+                    for (JsonNode itemNode : itemsNode) {
+                        processItem(videoId, itemNode);
+                    }
+                } else {
+                    throw new IllegalArgumentException("'items' should be an array.");
                 }
-            } else {
-                throw new IllegalArgumentException("'items' should be an array.");
+            } catch (Exception e) {
+                System.err.println("Failed to process Kafka message: " + data);
+                e.printStackTrace();
             }
-        } catch (Exception e) {
-            System.err.println("Failed to process Kafka message: " + data);
-            e.printStackTrace();
-        }
+        });
     }
 
     private void processItem(String videoId, JsonNode itemNode) {
         try {
+            System.out.println("Processing item for videoId: " + videoId + ", item: " + itemNode);
+
             videoDataMap.computeIfAbsent(videoId, key -> new LinkedBlockingQueue<>(100));
             BlockingQueue<JsonNode> queue = videoDataMap.get(videoId);
 
             synchronized (queue) {
                 if (queue.size() >= 100) {
-                    queue.poll();
+                    JsonNode removedItem = queue.poll(); // 만료된 항목 로그
+                    System.out.println("Queue full. Removing oldest item: " + removedItem);
                 }
                 queue.offer(itemNode);
+                System.out.println("Added item to queue. Current queue size: " + queue.size());
             }
 
-            // Send SSE event with the item data
+            // SSE 이벤트 전송
+            System.out.println("Sending SSE event for videoId: " + videoId + ", item: " + itemNode);
             sseEmitters.sendEvent(videoId, itemNode);
         } catch (Exception e) {
             System.err.println("Failed to process item: " + itemNode);
@@ -115,5 +128,6 @@ public class KafkaConsumerService {
         if (consumer != null) {
             consumer.wakeup();
         }
+        executorService.shutdown();
     }
 }
