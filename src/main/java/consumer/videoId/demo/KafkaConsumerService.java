@@ -11,17 +11,15 @@ import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 @Component
 public class KafkaConsumerService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ConcurrentMap<String, BlockingQueue<JsonNode>> videoDataMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Queue<JsonNode>> videoDataMap = new ConcurrentHashMap<>();
     private final SseEmitters sseEmitters;
     private KafkaConsumer<String, String> consumer;
-
-    // 성능 개선을 위한 스레드 풀
-    private final ExecutorService executorService = Executors.newFixedThreadPool(10);
 
     public KafkaConsumerService(SseEmitters sseEmitters) {
         this.sseEmitters = sseEmitters;
@@ -29,16 +27,42 @@ public class KafkaConsumerService {
 
     @PostConstruct
     public void startKafkaConsumer() {
+        int maxRetries = 5;
+        int retryCount = 0;
+
+        while (retryCount < maxRetries) {
+            try {
+                initializeConsumer();
+                break; // 연결 성공 시 루프 종료
+            } catch (Exception e) {
+                retryCount++;
+                System.err.println("Kafka Consumer 재연결 시도: " + retryCount);
+                try {
+                    Thread.sleep(5000); // 재시도 간격
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        if (retryCount == maxRetries) {
+            System.err.println("Kafka Consumer 재연결 실패");
+            throw new RuntimeException("Kafka Consumer 재연결 실패");
+        }
+    }
+
+    private void initializeConsumer() {
         Properties props = new Properties();
         props.put("bootstrap.servers", "kafka-svc:9093");
         props.put("group.id", "video-sse-consumer");
         props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
         props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
-        props.put("auto.offset.reset", "latest");
+        props.put("auto.offset.reset", "earliest"); // 데이터 손실 방지를 위해 earliest로 설정
 
         consumer = new KafkaConsumer<>(props);
         consumer.subscribe(Collections.singletonList("CHAT2"));
 
+        // Kafka Polling
         new Thread(() -> {
             try {
                 while (true) {
@@ -48,7 +72,7 @@ public class KafkaConsumerService {
                     }
                 }
             } catch (WakeupException e) {
-                System.out.println("Kafka consumer is shutting down.");
+                System.out.println("Kafka consumer shutting down.");
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
@@ -58,68 +82,55 @@ public class KafkaConsumerService {
     }
 
     private void processKafkaMessage(String data) {
-        executorService.submit(() -> {
-            try {
-                System.out.println("Raw Kafka message received: " + data); // 원본 메시지 로그
-                JsonNode rootNode = objectMapper.readTree(data);
-
-                // videoId 추출
-                String videoId = Optional.ofNullable(rootNode.get("videoId"))
-                        .map(JsonNode::asText)
-                        .orElseThrow(() -> new IllegalArgumentException("Missing 'videoId'"));
-                System.out.println("Extracted videoId: " + videoId); // videoId 추출 로그
-
-                // items 배열 추출
-                JsonNode itemsNode = Optional.ofNullable(rootNode.get("items"))
-                        .orElseThrow(() -> new IllegalArgumentException("Missing 'items'"));
-
-                if (itemsNode.isArray()) {
-                    System.out.println("Processing 'items' array with size: " + itemsNode.size());
-                    for (JsonNode itemNode : itemsNode) {
-                        processItem(videoId, itemNode);
-                    }
-                } else {
-                    throw new IllegalArgumentException("'items' should be an array.");
-                }
-            } catch (Exception e) {
-                System.err.println("Failed to process Kafka message: " + data);
-                e.printStackTrace();
-            }
-        });
-    }
-
-    private void processItem(String videoId, JsonNode itemNode) {
         try {
-            System.out.println("Processing item for videoId: " + videoId + ", item: " + itemNode);
+            JsonNode rootNode = objectMapper.readTree(data);
+            String videoId = rootNode.get("videoId").asText();
+            JsonNode itemsNode = rootNode.get("items");
 
-            videoDataMap.computeIfAbsent(videoId, key -> new LinkedBlockingQueue<>(100));
-            BlockingQueue<JsonNode> queue = videoDataMap.get(videoId);
-
-            synchronized (queue) {
-                if (queue.size() >= 100) {
-                    JsonNode removedItem = queue.poll(); // 만료된 항목 로그
-                    System.out.println("Queue full. Removing oldest item: " + removedItem);
+            if (itemsNode.isArray()) {
+                for (JsonNode itemNode : itemsNode) {
+                    processItem(videoId, itemNode);
                 }
-                queue.offer(itemNode);
-                System.out.println("Added item to queue. Current queue size: " + queue.size());
             }
-
-            // SSE 이벤트 전송
-            System.out.println("Sending SSE event for videoId: " + videoId + ", item: " + itemNode);
-            sseEmitters.sendEvent(videoId, itemNode);
         } catch (Exception e) {
-            System.err.println("Failed to process item: " + itemNode);
             e.printStackTrace();
         }
     }
 
-    public List<JsonNode> getVideoData(String videoId) {
-        BlockingQueue<JsonNode> queue = videoDataMap.get(videoId);
+    private void processItem(String videoId, JsonNode itemNode) {
+        // 데이터 저장
+        Queue<JsonNode> queue = videoDataMap.computeIfAbsent(videoId, key -> new ConcurrentLinkedQueue<>());
+
+        synchronized (queue) {
+            // 큐 크기를 100개로 제한하여 가장 오래된 데이터 삭제
+            if (queue.size() >= 100) {
+                queue.poll(); // 가장 오래된 데이터 제거
+            }
+            queue.offer(itemNode); // 새로운 데이터 추가
+        }
+
+        // SSE로 데이터 전송
+        sseEmitters.sendEvent(videoId, itemNode);
+    }
+
+    // 최초 요청 시 최신 100개의 데이터 반환
+    public List<JsonNode> getLatestData(String videoId) {
+        Queue<JsonNode> queue = videoDataMap.get(videoId);
         if (queue == null) {
             return Collections.emptyList();
         }
-        synchronized (queue) {
-            return new ArrayList<>(queue);
+
+        List<JsonNode> result = new ArrayList<>(queue);
+        return result.subList(Math.max(result.size() - 100, 0), result.size());
+    }
+
+    public void subscribe(String videoId, Consumer<JsonNode> callback) {
+        // videoId에 해당하는 데이터를 가져옴
+        Queue<JsonNode> queue = videoDataMap.get(videoId);
+        if (queue != null) {
+            for (JsonNode data : queue) {
+                callback.accept(data); // 데이터 처리 콜백 호출
+            }
         }
     }
 
@@ -128,6 +139,5 @@ public class KafkaConsumerService {
         if (consumer != null) {
             consumer.wakeup();
         }
-        executorService.shutdown();
     }
 }

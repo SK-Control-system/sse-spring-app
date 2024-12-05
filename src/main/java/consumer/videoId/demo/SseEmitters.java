@@ -18,6 +18,8 @@ public class SseEmitters {
         emitters.computeIfAbsent(videoId, key -> new CopyOnWriteArrayList<>()).add(emitter);
 
         emitter.onCompletion(() -> removeEmitter(videoId, emitter));
+
+
         emitter.onTimeout(() -> removeEmitter(videoId, emitter));
         emitter.onError(e -> removeEmitter(videoId, emitter));
 
@@ -38,7 +40,7 @@ public class SseEmitters {
         }
     }
 
-    private void removeEmitter(String videoId, SseEmitter emitter) {
+    public void removeEmitter(String videoId, SseEmitter emitter) {
         CopyOnWriteArrayList<SseEmitter> emitterList = emitters.get(videoId);
         if (emitterList != null) {
             emitterList.remove(emitter);
