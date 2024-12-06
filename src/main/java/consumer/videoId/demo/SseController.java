@@ -7,7 +7,6 @@ import org.springframework.http.MediaType;
 
 import java.util.List;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 @RestController
 public class SseController {
@@ -32,25 +31,16 @@ public class SseController {
 
         Executors.newSingleThreadExecutor().execute(() -> {
             try {
-                // 1. Kafka에서 최신 100개 데이터 가져와 배열로 전송
+                // 1. 최신 100개의 데이터 배열로 전송
                 List<JsonNode> pastData = kafkaConsumerService.getLatestData(videoId);
                 if (!pastData.isEmpty()) {
-                    emitter.send(SseEmitter.event().name("message").data(pastData)); // 초기 데이터를 배열로 전송
+                    emitter.send(SseEmitter.event().name("message").data(pastData));
                 }
 
-                // 2. Keep-Alive Ping 메시지 전송
-                Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
-                    try {
-                        emitter.send(SseEmitter.event().name("ping").data("keep-alive"));
-                    } catch (Exception e) {
-                        emitter.completeWithError(e);
-                    }
-                }, 0, 30, TimeUnit.SECONDS); // 30초마다 "ping" 메시지 전송
-
-                // 3. 실시간 데이터 스트리밍
+                // 2. 실시간 데이터 스트리밍
                 kafkaConsumerService.subscribe(videoId, data -> {
                     try {
-                        emitter.send(SseEmitter.event().name("message").data(data.toString())); // 실시간 데이터를 개별 전송
+                        emitter.send(SseEmitter.event().name("message").data(data));
                     } catch (Exception e) {
                         emitter.completeWithError(e);
                     }
