@@ -126,12 +126,15 @@ public class KafkaConsumerService {
     public List<JsonNode> getLatestData(String videoId) {
         Queue<JsonNode> queue = videoDataMap.get(videoId);
         if (queue == null) {
+            logger.info("No data found for videoId: {}", videoId);
             return Collections.emptyList();
         }
 
         synchronized (queue) {
             List<JsonNode> result = new ArrayList<>(queue);
-            return result.subList(Math.max(result.size() - 100, 0), result.size());
+            List<JsonNode> latestData = result.subList(Math.max(result.size() - 100, 0), result.size());
+            logger.info("Retrieved latest data for videoId: {}. Data size: {}", videoId, latestData.size());
+            return latestData;
         }
     }
 
