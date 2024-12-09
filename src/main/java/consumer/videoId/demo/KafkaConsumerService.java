@@ -20,6 +20,7 @@ public class KafkaConsumerService {
     private static final Logger logger = LoggerFactory.getLogger(KafkaConsumerService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConcurrentMap<String, Queue<JsonNode>> videoDataMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Set<String>> sentDataTracker = new ConcurrentHashMap<>();
     private final SseEmitters sseEmitters;
     private KafkaConsumer<String, String> consumer;
     private ExecutorService executorService;
@@ -110,13 +111,17 @@ public class KafkaConsumerService {
 
     private void processItem(String videoId, JsonNode itemNode) {
         Queue<JsonNode> queue = videoDataMap.computeIfAbsent(videoId, key -> new ConcurrentLinkedQueue<>());
+        Set<String> sentData = sentDataTracker.computeIfAbsent(videoId, key -> ConcurrentHashMap.newKeySet());
 
+        String uniqueKey = itemNode.toString(); // 고유 키 생성
         synchronized (queue) {
-            if (queue.size() >= 100) {
-                logger.warn("Queue for videoId: {} reached max capacity. Oldest data will be removed.", videoId);
-                queue.poll();
+            if (!sentData.contains(uniqueKey)) {
+                if (queue.size() >= 100) {
+                    queue.poll();
+                }
+                queue.offer(itemNode);
+                sentData.add(uniqueKey); // 중복 데이터 추적
             }
-            queue.offer(itemNode);
         }
 
         logger.info("Added item to queue for videoId: {}. Queue size: {}", videoId, queue.size());
