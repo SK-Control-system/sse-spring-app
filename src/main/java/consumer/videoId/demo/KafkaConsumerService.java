@@ -126,22 +126,21 @@ public class KafkaConsumerService {
     public List<JsonNode> getLatestData(String videoId) {
         Queue<JsonNode> queue = videoDataMap.get(videoId);
         if (queue == null) {
+            logger.info("No data found for videoId: {}", videoId);
             return Collections.emptyList();
         }
 
         synchronized (queue) {
             List<JsonNode> result = new ArrayList<>(queue);
-            return result.subList(Math.max(result.size() - 100, 0), result.size());
+            List<JsonNode> latestData = result.subList(Math.max(result.size() - 100, 0), result.size());
+            logger.info("Retrieved latest data for videoId: {}. Data size: {}", videoId, latestData.size());
+            return latestData;
         }
     }
 
     public void subscribe(String videoId, java.util.function.Consumer<JsonNode> callback) {
-        Queue<JsonNode> queue = videoDataMap.get(videoId);
-        if (queue != null) {
-            synchronized (queue) {
-                queue.forEach(callback::accept);
-            }
-        }
+        // 초기 데이터를 무시하고 실시간 데이터만 처리
+        logger.info("Subscribing for real-time data only for videoId: {}", videoId);
     }
 
     @PreDestroy
