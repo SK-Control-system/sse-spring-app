@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sse-spring-app
+  labels:
+    app: sse-spring-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sse-spring-app
+  template:
+    metadata:
+      labels:
+        app: sse-spring-app
+    spec:
+      containers:
+      - name: sse-spring-app
+        image: 615299753054.dkr.ecr.ap-southeast-2.amazonaws.com/sse-spring-app:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-svc:9093" # EKS 내 카프카 서비스 주소
