@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: sse-spring-app
-        image: 615299753054.dkr.ecr.ap-southeast-2.amazonaws.com/sse-spring-app:latest
+        image: 615299753054.dkr.ecr.us-east-1.amazonaws.com/sse-spring-app:latest
         ports:
         - containerPort: 8080
         env:
