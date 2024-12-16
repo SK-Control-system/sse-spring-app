@@ -7,7 +7,7 @@ metadata:
 spec:
   type: LoadBalancer
   selector:
-    app: sse-spring-app  # Pod의 라벨과 일치해야 합니다.
+    app: sse-spring-app  # Pod의 라벨과 일git치해야 합니다.
   ports:
     - protocol: TCP
       port: 80            # 외부 접근 시 사용할 포트 (보통 80으로 노출)          # 서비스가 노출하는 포트
